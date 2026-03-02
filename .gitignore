@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+data/factoring.db
+data/
+Dokumente/
+Archiv/
+.claude/
+*.egg-info/
+dist/
+build/
+.env
