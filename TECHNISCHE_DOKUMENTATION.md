@@ -7,23 +7,25 @@ Webbasiertes Factoring-Management-Tool fuer GRAIL Automotive. Verwaltet den Rech
 Lieferant (z.B. Soieta Tech) -> TRUMPF Financial Services (Vorfinanzierung) -> GRAIL Automotive (Zahlung).
 
 ### Tech-Stack
-- **Python 3.12**
-- **Streamlit 1.53+** - Web-UI (Multi-Page App, laeuft lokal im Browser)
-- **SQLite** (built-in) - Lokale Datenbank
+- **Python 3.12** (festgelegt via `runtime.txt`)
+- **Streamlit 1.53+** - Web-UI (Multi-Page App)
+- **Supabase** - Cloud-Datenbank (PostgreSQL) + Storage (PDFs/Reports)
 - **pdfplumber** - PDF-Textextraktion (kein OCR, benoetigt Text-Layer)
 - **plotly** - Interaktive Charts im Dashboard
 - **openpyxl** - Excel-Export mit professioneller Formatierung
 - **fpdf2** - PDF-Report-Generierung
 - **pandas** - Datenverarbeitung
 
-### Voraussetzungen
-```
-pip install streamlit pdfplumber plotly openpyxl fpdf2 pandas
-```
-Oder via `requirements.txt`:
+### Hosting & Deployment
+- **App:** Streamlit Community Cloud (automatisches Deployment bei Push auf `master`)
+- **Datenbank + Storage:** Supabase-Projekt `victor` (`utmaraahcnavgumuqtjm`)
+- **Quellcode:** GitHub `viic91/trumpf-factoring` (public, Branch `master`)
+
+### Voraussetzungen (lokal)
 ```
 pip install -r requirements.txt
 ```
+Zusaetzlich: `.streamlit/secrets.toml` mit `SUPABASE_URL` und `SUPABASE_KEY`.
 
 ---
 
@@ -34,8 +36,10 @@ Trumpf-Factoring-Tool/
 |
 |-- app.py                              # Streamlit Hauptapp (Redirect zum Dashboard)
 |-- requirements.txt                    # Python-Dependencies
+|-- runtime.txt                         # Python-Version fuer Streamlit Cloud (3.12)
 |-- GEBRAUCHSANWEISUNG.md              # Benutzerhandbuch
 |-- TECHNISCHE_DOKUMENTATION.md        # Diese Datei
+|-- migrate_data.py                    # Einmaliges Migrationsskript (SQLite -> Supabase)
 |
 |-- pages/                              # Streamlit Multi-Page Navigation
 |   |-- 1_Dashboard.py                  # KPIs + Charts
@@ -46,77 +50,73 @@ Trumpf-Factoring-Tool/
 |-- modules/                            # Backend-Logik
 |   |-- __init__.py                     # (leer, Package-Marker)
 |   |-- invoice_parser.py              # PDF-Parsing + Regex-Extraktion
-|   |-- data_manager.py                # SQLite CRUD + Dateiverwaltung
+|   |-- data_manager.py                # Supabase CRUD + Storage-Verwaltung
 |   |-- calculations.py                # Zins-/Kosten-Berechnungen
 |   |-- excel_export.py                # Professioneller Excel-Report
 |   |-- pdf_report.py                  # PDF Ist-Report (GRAIL-Branding)
 |
-|-- data/                               # Laufzeitdaten (auto-erstellt)
-|   |-- factoring.db                    # SQLite-Datenbank
-|   |-- invoices/                       # (Legacy, nicht mehr aktiv genutzt)
+|-- .streamlit/
+|   |-- config.toml                     # Streamlit-Konfiguration
+|   |-- secrets.toml                    # Lokale Secrets (in .gitignore!)
 |
-|-- Dokumente/                          # PDF-Archiv (pro Vorgang ein Ordner)
-|   |-- {Trumpf-RE-Nr}_{Lieferant}/
-|       |-- Lieferantenrechnung_{RE-Nr}.pdf
-|       |-- Trumpf_{RE-Nr}.pdf
+|-- data/                               # Legacy (nur lokal, nicht mehr aktiv)
+|   |-- factoring.db                    # Alte SQLite-Datenbank (historisch)
 |
-|-- Archiv/                             # Auto-archivierte Reports (1 pro Tag)
-|   |-- Trumpf_Factoring_Report_YYYY-MM-DD.xlsx
-|   |-- Trumpf_Factoring_Report_YYYY-MM-DD.pdf
-|
+|-- Dokumente/                          # Legacy lokales PDF-Archiv (nicht mehr aktiv)
 |-- .claude/
     |-- launch.json                     # Dev-Server Konfiguration
 ```
+
+### Supabase-Ressourcen
+- **Tabelle:** `factoring_records` (91 Datensaetze, migriert aus SQLite)
+- **Storage-Bucket:** `factoring-invoices` (28 PDFs, Rechnungsarchiv)
+- **Storage-Bucket:** `factoring-reports` (Auto-archivierte Excel/PDF-Reports)
 
 ---
 
 ## 3. Datenbank-Schema
 
-### Tabelle: `factoring_records`
-
-SQLite-Datenbank unter `data/factoring.db`. Wird automatisch beim ersten Import von `data_manager.py` erstellt.
+### Tabelle: `factoring_records` (Supabase/PostgreSQL)
 
 ```sql
-CREATE TABLE IF NOT EXISTS factoring_records (
-    -- Primaerschluessel
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+-- Primaerschluessel
+id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
 
-    -- Lieferanten-Daten
-    lieferant TEXT NOT NULL,             -- Firmenname (z.B. "Soieta Tech s.r.o")
-    re_nr_lieferant TEXT,                -- Rechnungsnummer des Lieferanten (z.B. "202510089")
-    re_datum_lieferant TEXT,             -- Rechnungsdatum (ISO: YYYY-MM-DD)
-    netto_betrag REAL,                   -- Nettobetrag Lieferantenrechnung
-    brutto_betrag REAL,                  -- Bruttobetrag Lieferantenrechnung
+-- Lieferanten-Daten
+lieferant TEXT NOT NULL,             -- Firmenname (z.B. "Soieta Tech s.r.o")
+re_nr_lieferant TEXT,                -- Rechnungsnummer des Lieferanten (z.B. "202510089")
+re_datum_lieferant TEXT,             -- Rechnungsdatum (ISO: YYYY-MM-DD)
+netto_betrag DOUBLE PRECISION,      -- Nettobetrag Lieferantenrechnung
+brutto_betrag DOUBLE PRECISION,     -- Bruttobetrag Lieferantenrechnung
 
-    -- Trumpf-Daten
-    valuta_trumpf TEXT,                  -- Faelligkeitsdatum/Valuta der Trumpf-Rechnung
-    re_nr_trumpf TEXT,                   -- Trumpf-Rechnungsnummer (Format: 66XXXX)
-    re_datum_trumpf TEXT,                -- Rechnungsdatum Trumpf (ISO)
-    zahlung_an_trumpf TEXT,              -- Datum der Vollzahlung an Trumpf (ISO)
-    trumpf_netto REAL,                   -- Nettobetrag Trumpf-Rechnung
-    trumpf_brutto REAL,                  -- Bruttobetrag Trumpf-Rechnung
+-- Trumpf-Daten
+valuta_trumpf TEXT,                  -- Faelligkeitsdatum/Valuta der Trumpf-Rechnung
+re_nr_trumpf TEXT,                   -- Trumpf-Rechnungsnummer (Format: 66XXXX)
+re_datum_trumpf TEXT,                -- Rechnungsdatum Trumpf (ISO)
+zahlung_an_trumpf TEXT,              -- Datum der Vollzahlung an Trumpf (ISO)
+trumpf_netto DOUBLE PRECISION,      -- Nettobetrag Trumpf-Rechnung
+trumpf_brutto DOUBLE PRECISION,     -- Bruttobetrag Trumpf-Rechnung
 
-    -- Zahlungsstatus
-    bereits_gezahlt REAL DEFAULT 0,      -- Summe bisheriger Zahlungen
-    offener_betrag REAL,                 -- BERECHNET: trumpf_brutto - bereits_gezahlt
-    status TEXT DEFAULT 'Beauftragt',    -- Workflow-Status (siehe unten)
+-- Zahlungsstatus
+bereits_gezahlt DOUBLE PRECISION DEFAULT 0,  -- Summe bisheriger Zahlungen
+offener_betrag DOUBLE PRECISION,             -- BERECHNET: trumpf_brutto - bereits_gezahlt
+status TEXT DEFAULT 'Beauftragt',            -- Workflow-Status (siehe unten)
 
-    -- Berechnete Finanzkennzahlen
-    zinsen REAL,                         -- BERECHNET: trumpf_netto - netto_betrag
-    zinsaufschlag REAL,                  -- BERECHNET: zinsen / netto_betrag (Dezimalzahl)
-    eff_jahreszins REAL,                 -- BERECHNET: (zinsen/netto) * (365/tage) (Dezimalzahl)
-    tage_finanziert INTEGER,             -- BERECHNET: zahlung_an_trumpf - re_datum_trumpf
-    zinsen_pro_tag REAL,                 -- BERECHNET: zinsen / tage_finanziert
-    zinssatz_30_tage REAL,               -- BERECHNET: zinsaufschlag * (30/tage)
+-- Berechnete Finanzkennzahlen
+zinsen DOUBLE PRECISION,             -- BERECHNET: trumpf_netto - netto_betrag
+zinsaufschlag DOUBLE PRECISION,      -- BERECHNET: zinsen / netto_betrag (Dezimalzahl)
+eff_jahreszins DOUBLE PRECISION,     -- BERECHNET: (zinsen/netto) * (365/tage) (Dezimalzahl)
+tage_finanziert INTEGER,             -- BERECHNET: zahlung_an_trumpf - re_datum_trumpf
+zinsen_pro_tag DOUBLE PRECISION,     -- BERECHNET: zinsen / tage_finanziert
+zinssatz_30_tage DOUBLE PRECISION,   -- BERECHNET: zinsaufschlag * (30/tage)
 
-    -- PDF-Referenzen (absolute Dateipfade)
-    invoice_pdf_lieferant TEXT,          -- Pfad zur Lieferantenrechnung-PDF
-    invoice_pdf_trumpf TEXT,             -- Pfad zur Trumpf-Rechnung-PDF
+-- PDF-Referenzen (Supabase Storage Pfade)
+invoice_pdf_lieferant TEXT,          -- Storage-Pfad zur Lieferantenrechnung-PDF
+invoice_pdf_trumpf TEXT,             -- Storage-Pfad zur Trumpf-Rechnung-PDF
 
-    -- Metadaten
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    updated_at TEXT DEFAULT (datetime('now','localtime'))
-);
+-- Metadaten
+created_at TIMESTAMPTZ DEFAULT now(),
+updated_at TIMESTAMPTZ DEFAULT now()
 ```
 
 ### Status-Werte
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS factoring_records (
 - `Abgeschlossen` - Archiviert/Erledigt
 
 ### Datumsformat
-Alle Datumsfelder werden als ISO-String (`YYYY-MM-DD`) in der DB gespeichert. Die Funktion `_parse_date()` in `data_manager.py` konvertiert automatisch aus:
+Alle Datumsfelder werden als ISO-String (`YYYY-MM-DD`) gespeichert. Die Funktion `_parse_date()` in `data_manager.py` konvertiert automatisch aus:
 - `datetime` / `date` Objekte
 - `YYYY-MM-DD` Strings
 - `DD.MM.YYYY` Strings (deutsches Format)
@@ -139,24 +139,31 @@ Alle Datumsfelder werden als ISO-String (`YYYY-MM-DD`) in der DB gespeichert. Di
 
 ### 4.1 `modules/data_manager.py`
 
-Zentrale Datenschicht. Wird von allen Seiten importiert. Initialisiert die DB automatisch beim Import (`init_db()` am Modulende).
+Zentrale Datenschicht mit Supabase-Client. Wird von allen Seiten importiert.
 
-**Pfad-Konstanten:**
+**Supabase-Client (Singleton):**
 ```python
-DB_DIR = <Projektordner>/data/
-DB_PATH = <Projektordner>/data/factoring.db
-INVOICES_DIR = <Projektordner>/data/invoices/    # Legacy
-DOCS_DIR = <Projektordner>/Dokumente/            # Aktives PDF-Archiv
+@st.cache_resource
+def _get_supabase() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 ```
 
-**Kernfunktionen:**
+**Konstanten:**
+```python
+TABLE = "factoring_records"
+BUCKET_INVOICES = "factoring-invoices"
+BUCKET_REPORTS = "factoring-reports"
+```
+
+**CRUD-Funktionen:**
 
 | Funktion | Beschreibung |
 |---|---|
-| `get_connection()` | SQLite-Verbindung mit WAL-Mode und Row-Factory |
-| `init_db()` | Erstellt Tabelle falls nicht vorhanden |
+| `get_supabase()` | Supabase-Client (gecacht) |
 | `insert_record(data)` | Neuen Datensatz einfuegen, gibt ID zurueck |
-| `update_record(id, data)` | Datensatz aktualisieren (setzt `updated_at`) |
+| `update_record(id, data)` | Datensatz aktualisieren |
 | `delete_record(id)` | Datensatz loeschen |
 | `get_record(id)` | Einzelnen Datensatz als `dict` holen |
 | `get_all_records()` | Alle Datensaetze als `pandas.DataFrame` |
@@ -165,14 +172,21 @@ DOCS_DIR = <Projektordner>/Dokumente/            # Aktives PDF-Archiv
 | `get_status_options()` | Hartcodierte Status-Liste |
 | `find_by_trumpf_re_nr(nr)` | Suche per Trumpf-RE-Nr (fuer Zahlungszuordnung) |
 | `find_by_lieferant_re_nr(nr)` | Suche per Lieferanten-RE-Nr (fuer Vorgang-Matching) |
-| `get_vorgang_dir(re_nr_trumpf, lieferant)` | Erstellt/gibt Ordnerpfad zurueck |
-| `save_invoice_pdf(bytes, dir, type, nr)` | Speichert PDF im Vorgangsordner |
-| `import_from_excel(path)` | Initialer Excel-Import (Sheet "2025_NEU") |
 | `record_count()` | Anzahl Datensaetze |
 
-**Ordnerstruktur fuer PDFs:**
+**Storage-Funktionen:**
+
+| Funktion | Beschreibung |
+|---|---|
+| `get_storage_path(re_nr_trumpf, lieferant)` | Generiert Storage-Ordnerpfad |
+| `save_invoice_pdf(bytes, folder, type, nr)` | Speichert PDF in Supabase Storage (upsert) |
+| `get_invoice_url(path, expires_in)` | Signierte URL fuer eine gespeicherte PDF |
+| `save_report(bytes, filename)` | Speichert Report in Supabase Storage |
+| `get_vorgang_dir(...)` | Alias fuer `get_storage_path` (Abwaertskompatibilitaet) |
+
+**Storage-Pfad-Struktur:**
 ```
-Dokumente/{RE_Trumpf}_{Lieferant_kurz}/
+{RE_Trumpf}_{Lieferant_kurz}/
 ```
 - `Lieferant_kurz` = erster Teil des Lieferantennamens vor dem Leerzeichen
 - Ungueltige Zeichen (`<>:"/\|?*`) werden durch `_` ersetzt
@@ -181,6 +195,12 @@ Dokumente/{RE_Trumpf}_{Lieferant_kurz}/
 **PDF-Dateinamen:**
 - Trumpf: `Trumpf_{Trumpf-RE-Nr}.pdf` (z.B. `Trumpf_663240.pdf`)
 - Lieferant: `Lieferantenrechnung_{Lieferanten-RE-Nr}.pdf` (z.B. `Lieferantenrechnung_202510081.pdf`)
+
+**Hilfsfunktionen:**
+- `_parse_date(val)` - Datumskonvertierung zu ISO-String
+- `_safe_float(val)` - Sichere Float-Konvertierung mit Rundung auf 2 Stellen
+- `_sanitize_folder_name(name)` - Ungueltige Zeichen aus Ordnernamen entfernen
+- `_prepare_record(data)` - Datensatz fuer Supabase vorbereiten (Typen konvertieren)
 
 ---
 
@@ -382,9 +402,10 @@ Generiert einen GRAIL-gebrandeten Ist-Report im Portrait A4-Format (optimiert fu
 
 ### 5.1 `app.py` (Redirect)
 
+- Prueft ob `SUPABASE_URL` und `SUPABASE_KEY` in Secrets vorhanden sind
 - Leitet automatisch zum Dashboard weiter via `st.switch_page("pages/1_Dashboard.py")`
 - Custom CSS fuer Sidebar-Styling (dunkles Farbschema, wird global angewendet)
-- Keine eigene Seitenanzeige mehr
+- Keine eigene Seitenanzeige
 
 ### 5.2 `pages/1_Dashboard.py`
 
@@ -411,7 +432,7 @@ Upload (Drag & Drop, mehrere PDFs)
 Fuer jede Datei:
   1. parse_invoice_pdf(bytes)           # Text extrahieren + Typ erkennen
   2. _extract_fields(result, type)      # Parser-Output -> flaches Dict
-  3. _find_existing(extracted, type)    # Bestehenden Vorgang suchen
+  3. _find_existing(extracted, type)    # Bestehenden Vorgang suchen (Supabase)
   4. _compare_fields(extracted, rec)    # Vergleich: neu/geaendert/PDF fehlt
     |
     v
@@ -421,7 +442,7 @@ Uebersicht anzeigen (gruen=neu, gelb=update, blau=skip, rot=fehler)
 "X Datei(en) verarbeiten" Button
     |
     v
-_process_file() pro Datei -> insert_record / update_record + save_invoice_pdf
+_process_file() pro Datei -> insert_record / update_record + save_invoice_pdf (Supabase Storage)
 ```
 
 **Hilfsfunktionen:**
@@ -444,7 +465,7 @@ _process_file() pro Datei -> insert_record / update_record + save_invoice_pdf
 - Returns: `(new_fields, changed_fields, pdf_missing)`
 
 `_process_file(pdf_bytes, doc_type, extracted, existing_match)`:
-- Update: Fehlende/geaenderte Felder mergen, PDF speichern, `berechne_alle_felder()`, `update_record()`
+- Update: Fehlende/geaenderte Felder mergen, PDF in Supabase Storage speichern, `berechne_alle_felder()`, `update_record()`
 - Create: Neuen Datensatz anlegen mit allen extrahierten Feldern
 
 ### 5.4 `pages/3_Datenverwaltung.py`
@@ -486,18 +507,17 @@ elif neue_zahlung > 0:
 - `generate_pdf_report(df)` -> `st.download_button`
 - Datenvorschau-Tabelle unten
 
-**Auto-Archivierung:**
+**Auto-Archivierung (Supabase Storage):**
 ```python
-ARCHIV_DIR = Path(<Projektordner>) / "Archiv"
-ARCHIV_DIR.mkdir(exist_ok=True)
-
 def _archiviere(daten: bytes, dateiname: str):
-    (ARCHIV_DIR / dateiname).write_bytes(daten)
+    try:
+        save_report(daten, dateiname)   # -> Bucket "factoring-reports"
+    except Exception:
+        pass  # Archivierung darf Export nicht blockieren
 ```
-- Jeder generierte Report wird automatisch im `Archiv/`-Ordner gespeichert
+- Jeder generierte Report wird automatisch in Supabase Storage archiviert
 - Dateiname: `Trumpf_Factoring_Report_YYYY-MM-DD.xlsx` bzw. `.pdf`
-- Maximal 1 Report pro Tag (bei erneutem Export am selben Tag wird ueberschrieben)
-- `try/except` um Archivierung: darf Export nicht blockieren
+- Maximal 1 Report pro Tag (bei erneutem Export am selben Tag wird ueberschrieben via upsert)
 
 ---
 
@@ -545,11 +565,11 @@ Vollzahlung (bereits_gezahlt >= trumpf_brutto):
 ### Smart Duplicate Detection (Upload)
 
 Beim Upload wird fuer jede PDF geprueft:
-1. Gibt es einen bestehenden Vorgang? (per RE-Nr Matching)
+1. Gibt es einen bestehenden Vorgang? (per RE-Nr Matching in Supabase)
 2. Falls ja: Feld-fuer-Feld-Vergleich
    - `new_fields`: Feld in DB leer, Wert in PDF vorhanden -> ergaenzen
    - `changed_fields`: Feld in DB anders als in PDF -> aktualisieren
-   - `pdf_missing`: PDF-Datei fehlt im Vorgang -> ablegen
+   - `pdf_missing`: PDF-Datei fehlt im Storage -> ablegen
 3. Falls ALLES identisch UND PDF vorhanden -> Skip ("Duplikat")
 4. Falls Unterschiede -> Update mit Details anzeigen
 
@@ -577,50 +597,90 @@ Der Parser erkennt dies am Muster `TOTAL DUE Currency EUR X,XXX.XX` und parst mi
 Helvetica (fpdf2 Standard-Font) unterstuetzt keine deutschen Umlaute. Die Klasse `FactoringReport` ersetzt automatisch:
 `ae/oe/ue/Ae/Oe/Ue/ss/EUR` via `_safe_text()`.
 
-### Concurrent Access
-SQLite wird mit `journal_mode=WAL` betrieben, was parallele Lesezugriffe erlaubt. Da Streamlit pro Tab eine eigene Session hat, koennen theoretisch Race Conditions bei gleichzeitigem Schreiben auftreten. Fuer den Ein-Benutzer-Betrieb ist das unkritisch.
+---
+
+## 8. Deployment & Updates
+
+### Streamlit Community Cloud
+- **Repo:** `viic91/trumpf-factoring` (GitHub, public)
+- **Branch:** `master`
+- **Main file:** `app.py`
+- **Secrets:** `SUPABASE_URL` + `SUPABASE_KEY` (in Streamlit Cloud Dashboard konfiguriert)
+- **Auto-Deploy:** Jeder Push auf `master` loest automatisch ein Redeployment aus
+
+### Update-Workflow
+1. Code lokal aendern (oder via Claude Code)
+2. `git add` + `git commit` + `git push origin master`
+3. Streamlit Cloud erkennt den Push und deployed die neue Version automatisch (1-2 Minuten)
+
+### Secrets aendern
+Supabase-Credentials werden ueber das **Streamlit Cloud Dashboard** verwaltet (Settings -> Secrets). Nicht ueber Git.
+
+### Supabase
+- **Projekt:** `victor` (`utmaraahcnavgumuqtjm`)
+- **Region:** eu-central-1 (Frankfurt)
+- **URL:** `https://utmaraahcnavgumuqtjm.supabase.co`
 
 ---
 
-## 8. Wiederherstellung / Neuaufbau
+## 9. Wiederherstellung / Neuaufbau
 
 ### Minimale Schritte zum Neuaufbau:
 
-1. **Python 3.12+ installieren**
-2. **Projektordner anlegen** mit obiger Struktur
-3. **Dependencies installieren:**
+1. **GitHub-Repo klonen:**
    ```
-   pip install streamlit pdfplumber plotly openpyxl fpdf2 pandas
+   git clone https://github.com/viic91/trumpf-factoring.git
    ```
-4. **Alle Python-Dateien** aus `modules/` und `pages/` sowie `app.py` anlegen (siehe Quellcode)
-5. **Starten:**
+2. **Dependencies installieren:**
+   ```
+   pip install -r requirements.txt
+   ```
+3. **Secrets einrichten** (`.streamlit/secrets.toml`):
+   ```toml
+   SUPABASE_URL = "https://utmaraahcnavgumuqtjm.supabase.co"
+   SUPABASE_KEY = "<anon-key>"
+   ```
+4. **Starten:**
    ```
    streamlit run app.py
    ```
-   Die Datenbank wird automatisch erstellt.
 
-### Daten migrieren:
-- `data/factoring.db` kopieren -> enthaelt alle Datensaetze
-- `Dokumente/` kopieren -> enthaelt alle PDF-Archivdateien
-- `Archiv/` kopieren -> enthaelt auto-archivierte Reports
-- **Achtung:** Die PDF-Pfade in der DB sind absolut. Bei Umzug auf einen anderen Rechner muessen die Pfade in `invoice_pdf_lieferant` und `invoice_pdf_trumpf` angepasst werden (SQL UPDATE).
+### Supabase-Tabelle neu erstellen (falls noetig):
+Die Tabelle `factoring_records` muss im Supabase-Projekt existieren. Schema siehe Abschnitt 3.
 
-### Excel-Import (einmalig):
-Falls die urspruengliche Excel-Datei importiert werden soll:
-```python
-from modules.data_manager import import_from_excel
-import_count = import_from_excel("Pfad/zur/Excel.xlsm")
-```
-Liest Sheet `2025_NEU`, erwartet 14 Spalten in fester Reihenfolge (siehe `import_from_excel()` Quellcode).
+### Daten migrieren (SQLite -> Supabase):
+Das Skript `migrate_data.py` wurde fuer die einmalige Migration von SQLite nach Supabase verwendet. Bei Bedarf kann es erneut ausgefuehrt werden.
 
 ---
 
-## 9. Konfiguration
+## 10. Abhaengigkeiten (requirements.txt)
+
+```
+streamlit>=1.30.0
+pdfplumber>=0.10.0
+plotly>=5.18.0
+openpyxl>=3.1.0
+fpdf2>=2.7.0
+pandas>=2.0.0
+supabase>=2.0.0
+```
+
+Alle Pakete sind via `pip install` verfuegbar. Keine externen System-Dependencies (kein Tesseract, kein Poppler etc.).
+
+---
+
+## 11. Konfiguration
 
 ### Streamlit
 - Layout: `wide` auf allen Seiten
 - Sidebar: Dunkles Farbschema via Custom CSS
 - `set_page_config()` pro Seite mit individuellem Titel und Icon
+
+### runtime.txt
+```
+python-3.12
+```
+Stellt sicher, dass Streamlit Cloud die richtige Python-Version verwendet.
 
 ### Dev-Server (`.claude/launch.json`)
 ```json
@@ -634,18 +694,3 @@ Liest Sheet `2025_NEU`, erwartet 14 Spalten in fester Reihenfolge (siehe `import
     }]
 }
 ```
-
----
-
-## 10. Abhaengigkeiten (requirements.txt)
-
-```
-streamlit>=1.30.0
-pdfplumber>=0.10.0
-plotly>=5.18.0
-openpyxl>=3.1.0
-fpdf2>=2.7.0
-pandas>=2.0.0
-```
-
-Alle Pakete sind via `pip install` verfuegbar. Keine externen System-Dependencies (kein Tesseract, kein Poppler etc.).

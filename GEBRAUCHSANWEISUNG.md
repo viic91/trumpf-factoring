@@ -12,7 +12,15 @@ Dieses Tool verwaltet alle drei Schritte, berechnet automatisch Zinsen und Koste
 
 ---
 
-## Tool starten
+## Wo laeuft das Tool?
+
+Die App ist auf **Streamlit Community Cloud** deployed und ueber den Browser erreichbar – keine lokale Installation noetig.
+
+**Daten und PDFs** werden in **Supabase** gespeichert (Cloud-Datenbank + Cloud-Storage). Alle Daten sind von ueberall aus zugaenglich.
+
+### Lokal starten (Entwicklung)
+
+Falls du das Tool lokal starten moechtest:
 
 1. Oeffne ein Terminal / Eingabeaufforderung
 2. Navigiere zum Projektordner:
@@ -24,6 +32,8 @@ Dieses Tool verwaltet alle drei Schritte, berechnet automatisch Zinsen und Koste
    streamlit run app.py
    ```
 4. Der Browser oeffnet automatisch `http://localhost:8501`
+
+**Voraussetzung lokal:** Die Datei `.streamlit/secrets.toml` muss `SUPABASE_URL` und `SUPABASE_KEY` enthalten.
 
 **Tipp:** Die App laeuft solange das Terminal offen ist. Zum Beenden: `Strg+C` im Terminal.
 
@@ -76,13 +86,14 @@ Die App leitet automatisch zum Dashboard weiter. Es gibt keine separate Startsei
 - Das Tool nutzt diese Nummer, um Lieferantenrechnung und Trumpf-Rechnung zusammenzufuehren
 - Du musst nichts manuell zuordnen!
 
-**PDFs werden gespeichert unter:**
+**PDFs werden gespeichert in:**
+Supabase Storage (Bucket `factoring-invoices`), Ordnerstruktur:
 ```
-Dokumente/{Trumpf-RE-Nr}_{Lieferant-Kurzname}/
+{Trumpf-RE-Nr}_{Lieferant-Kurzname}/
   Lieferantenrechnung_{Lieferanten-RE-Nr}.pdf
   Trumpf_{Trumpf-RE-Nr}.pdf
 ```
-Beispiel: `Dokumente/663240_Soieta/Lieferantenrechnung_202510081.pdf`
+Beispiel: `663240_Soieta/Lieferantenrechnung_202510081.pdf`
 
 ---
 
@@ -93,7 +104,6 @@ Die Hauptseite fuer die taegliche Arbeit. Hat 4 Tabs:
 #### Tab "Offene Posten"
 - Zeigt alle Rechnungen die noch offen sind (Beauftragt, Fakturiert, Offene Teilzahlung)
 - Spalten: ID, Lieferant, RE-Nummern, Valuta, Betraege, Bezahlt am, Status, Zinsen, Tage, PDFs
-- **PDFs-Spalte**: Zeigt ob beide PDFs (Lieferant + Trumpf) vorhanden sind
 
 #### Tab "Alle"
 - Alle Datensaetze auf einen Blick, sortiert nach Status (offen zuerst)
@@ -155,7 +165,7 @@ Du kannst vor dem Export nach Status und Lieferant filtern. Der Filter "Offene P
 - Bei sehr vielen offenen Posten automatischer Seitenumbruch
 
 **Auto-Archivierung:**
-Jeder generierte Report (Excel + PDF) wird automatisch im Ordner `Archiv/` gespeichert. Pro Tag wird maximal ein Report gespeichert (bei mehreren Exporten am selben Tag wird der vorherige ueberschrieben).
+Jeder generierte Report (Excel + PDF) wird automatisch in Supabase Storage archiviert (Bucket `factoring-reports`). Pro Tag wird maximal ein Report gespeichert (bei mehreren Exporten am selben Tag wird der vorherige ueberschrieben).
 Dateiname-Format: `Trumpf_Factoring_Report_YYYY-MM-DD.xlsx` bzw. `.pdf`
 
 ---
@@ -208,9 +218,12 @@ Ja, im Tab "Bearbeiten" der Datenverwaltung. Alle Felder sind editierbar.
 Das Tool vergleicht alle Felder. Wenn alles identisch ist und die PDF bereits vorhanden ist, wird die Datei uebersprungen. Wenn Felder abweichen oder die PDF fehlt, wird ergaenzt.
 
 **Wo liegen meine Daten?**
-- Datenbank: `data/factoring.db` (SQLite)
-- PDFs: `Dokumente/{Vorgang}/` (pro Vorgang ein Ordner)
-- Reports: `Archiv/` (automatisch archivierte Excel- und PDF-Reports)
+- Datenbank: **Supabase** (PostgreSQL, Tabelle `factoring_records` im Projekt `victor`)
+- PDFs: **Supabase Storage** (Bucket `factoring-invoices`, pro Vorgang ein Ordner)
+- Reports: **Supabase Storage** (Bucket `factoring-reports`, automatisch archiviert)
 
-**Wie sichere ich meine Daten?**
-Kopiere den gesamten Projektordner. Die Datenbank (`data/factoring.db`), der `Dokumente/`-Ordner und der `Archiv/`-Ordner enthalten alle Daten, PDFs und Reports.
+**Wie wird die App aktualisiert?**
+Jeder Push nach `master` auf GitHub aktualisiert die App automatisch auf Streamlit Community Cloud innerhalb von 1-2 Minuten.
+
+**Brauche ich noch lokale Backups?**
+Nein. Alle Daten liegen in der Cloud (Supabase). Die alte SQLite-Datenbank (`data/factoring.db`) und der lokale `Dokumente/`-Ordner sind nur noch historische Referenz.
